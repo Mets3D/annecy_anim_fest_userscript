@@ -133,9 +133,17 @@ function parseFrTime(str) {
 }
 
 function findDateForCard(card) {
-    // DOM structure: div > h3 "Sunday 21 June 2026" + div > article.card
+    // All-days view: cards are grouped under H3 date headers
     const h3 = card.parentElement?.previousElementSibling;
-    return h3?.tagName === 'H3' ? h3.textContent.trim() : '';
+    if (h3?.tagName === 'H3') return h3.textContent.trim();
+
+    // Single-day view: date is only in the page heading e.g. "Programme of Thursday 25 June 2026"
+    for (const el of document.querySelectorAll('h1, h2')) {
+        const m = el.textContent.match(/programme\s+of\s+(.+)/i);
+        if (m) return m[1].trim();
+    }
+
+    return '';
 }
 
 function extractId(card) {
@@ -528,6 +536,20 @@ GM_addStyle(`
     pointer-events: none;
     user-select: none;
 }
+#annecy-md-btn {
+    background: #2a2a4a;
+    border: 1px solid #666;
+    color: #ddd;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: system-ui, sans-serif;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+}
+#annecy-md-btn:hover { background: #3a3a6a; }
 `);
 
 function buildPanel() {
@@ -655,8 +677,6 @@ function buildTimeline() {
                 <button class="tl-btn" id="tl-next">▶</button>
             </div>
             <div style="display:flex;gap:4px;">
-                <button class="tl-btn" id="tl-zoom-out" title="Zoom out (Ctrl+scroll)">−</button>
-                <button class="tl-btn" id="tl-zoom-in" title="Zoom in (Ctrl+scroll)">+</button>
                 <button class="tl-btn" id="tl-close">✕</button>
             </div>
         </header>
@@ -685,14 +705,6 @@ function buildTimeline() {
         timelineDayIndex = Math.min(days.length - 1, timelineDayIndex + 1);
         GM_setValue('annecy_tl_day', String(timelineDayIndex));
         renderTimeline(true);
-    });
-    document.getElementById('tl-zoom-out').addEventListener('click', () => {
-        pxPerHour = Math.max(40, pxPerHour - 20);
-        renderTimeline();
-    });
-    document.getElementById('tl-zoom-in').addEventListener('click', () => {
-        pxPerHour = Math.min(400, pxPerHour + 20);
-        renderTimeline();
     });
     document.getElementById('tl-close').addEventListener('click', () => {
         tl.style.display = 'none';
@@ -1137,6 +1149,44 @@ function syncOnHeartClick() {
 }
 
 // ---------------------------------------------------------------------------
+// DETAIL PAGE: MARKDOWN COPY BUTTON
+// ---------------------------------------------------------------------------
+
+function injectMdCopyButton() {
+    if (!location.pathname.match(/\/event\/[a-f0-9-]{36}/)) return;
+
+    function tryInsert() {
+        if (document.getElementById('annecy-md-btn')) return true;
+        const target = document.querySelector('div.column.button-wrapper') || document.querySelector('h1');
+        if (!target) return false;
+
+        const btn = document.createElement('button');
+        btn.id = 'annecy-md-btn';
+        btn.textContent = 'MD';
+        btn.title = 'Copy markdown link to clipboard';
+        btn.addEventListener('click', () => {
+            const title = document.querySelector('h1')?.textContent.trim() || '';
+            navigator.clipboard.writeText(`[${title}](${location.href})`).then(() => {
+                btn.textContent = '✓';
+                setTimeout(() => { btn.textContent = 'MD'; }, 1500);
+            });
+        });
+
+        if (target.tagName === 'H1') {
+            target.insertAdjacentElement('afterend', btn);
+        } else {
+            target.prepend(btn);
+        }
+        return true;
+    }
+
+    if (!tryInsert()) {
+        const obs = new MutationObserver(() => { if (tryInsert()) obs.disconnect(); });
+        obs.observe(document.body, { childList: true, subtree: true });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // INIT
 // ---------------------------------------------------------------------------
 
@@ -1157,6 +1207,7 @@ function init() {
     renderPanel();
     syncOnHeartClick();
     syncAcrossTabs();
+    injectMdCopyButton();
 }
 
 if (document.readyState === 'loading') {
