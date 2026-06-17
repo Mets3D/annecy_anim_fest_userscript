@@ -1010,24 +1010,52 @@ function removeEntryAndUnheart(id) {
     }
 }
 
+function markConflictsWithBooked() {
+    const booked = Object.values(plan).filter(e => e.status === 'Booked');
+    let count = 0;
+    for (const e of Object.values(plan)) {
+        if (e.status === 'Booked') continue;
+        if (booked.some(b => overlaps(b, e))) {
+            plan[e.id].status = "Can't attend due to conflict";
+            count++;
+        }
+    }
+    return count;
+}
+
 function importFavourites() {
+    const isReservations = location.search.includes('reservations=true');
     const cards = document.querySelectorAll('article.card');
-    let added = 0;
+    let added = 0, booked = 0, conflicted = 0;
+
     cards.forEach(card => {
-        const heart = card.querySelector('button[title*="Delete"][title*="favourites"]');
-        if (!heart) return;
+        if (!isReservations) {
+            const heart = card.querySelector('button[title*="Delete"][title*="favourites"]');
+            if (!heart) return;
+        }
         const screening = scrapeCard(card);
         if (!plan[screening.id]) {
-            plan[screening.id] = { ...screening, status: 'Interested' };
+            plan[screening.id] = { ...screening, status: isReservations ? 'Booked' : 'Interested' };
             added++;
+        } else if (isReservations && plan[screening.id].status !== 'Booked') {
+            plan[screening.id] = { ...plan[screening.id], status: 'Booked' };
+            booked++;
         }
     });
-    if (added > 0) {
+
+    if (isReservations) conflicted = markConflictsWithBooked();
+
+    const total = added + booked + conflicted;
+    if (total > 0) {
         savePlan(plan);
         renderPanel();
     }
     const btn = document.getElementById('annecy-planner-import');
-    btn.textContent = added > 0 ? `✓ ${added} imported` : '✓ Nothing new';
+    const parts = [];
+    if (added)      parts.push(`${added} added`);
+    if (booked)     parts.push(`${booked} marked Booked`);
+    if (conflicted) parts.push(`${conflicted} marked conflict`);
+    btn.textContent = parts.length ? `✓ ${parts.join(', ')}` : '✓ Nothing new';
     setTimeout(() => { btn.textContent = '⬇ Import ♥'; }, 2500);
 }
 
