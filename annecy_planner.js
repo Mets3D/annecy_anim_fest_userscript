@@ -561,6 +561,7 @@ function buildPanel() {
             <div style="display:flex;gap:6px;align-items:center;">
                 <button id="annecy-planner-timeline" title="Toggle timeline">📊</button>
                 <button id="annecy-planner-search-toggle" title="Search">🔍</button>
+                <button id="annecy-planner-export" title="Copy all to clipboard (paste into Google Sheets)">📋</button>
                 <button id="annecy-planner-import" title="Import all hearted events visible on this page">⬇ Import ♥</button>
                 <button id="annecy-planner-toggle" title="Minimise">−</button>
             </div>
@@ -589,6 +590,7 @@ function buildPanel() {
     document.body.appendChild(fab);
 
     document.getElementById('annecy-planner-import').addEventListener('click', importFavourites);
+    document.getElementById('annecy-planner-export').addEventListener('click', exportToClipboard);
     document.getElementById('annecy-planner-timeline').addEventListener('click', () => {
         const tl = document.getElementById('annecy-timeline');
         const opening = tl.style.display === 'none';
@@ -1008,6 +1010,90 @@ function removeEntryAndUnheart(id) {
     } else {
         removePlanEntry(id);
     }
+}
+
+function textColorForBg(hex) {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? '#000' : '#fff';
+}
+
+async function exportToClipboard() {
+    const btn = document.getElementById('annecy-planner-export');
+
+    const toDate = str => new Date(str.replace(/^\w+\s+/, ''));
+    const entries = Object.values(plan).sort((a, b) => {
+        const d = toDate(a.date || '') - toDate(b.date || '');
+        return d !== 0 ? d : (a.start || '').localeCompare(b.start || '');
+    });
+
+    if (!entries.length) {
+        btn.textContent = '✗';
+        setTimeout(() => { btn.textContent = '📋'; }, 2000);
+        return;
+    }
+
+    const byDate = {};
+    for (const e of entries) (byDate[e.date || 'Unknown'] ??= []).push(e);
+
+    const td = (content, style = '') =>
+        `<td style="padding:5px 9px;border:1px solid #ccc;vertical-align:middle;${style}">${content}</td>`;
+
+    const headerRow = `<tr style="background:#1a1a2e;color:#fff;font-weight:bold">
+        ${['Status', 'Start', 'End', 'Title', 'Venue', 'Type'].map(h =>
+            `<th style="padding:6px 9px;border:1px solid #555;text-align:left;white-space:nowrap">${h}</th>`
+        ).join('')}
+    </tr>`;
+
+    const bodyRows = [];
+    for (const [date, group] of Object.entries(byDate)) {
+        bodyRows.push(`<tr style="background:#2d1b4e">
+            <td colspan="6" style="padding:4px 9px;font-weight:bold;color:#ccc;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;border:1px solid #444">${date}</td>
+        </tr>`);
+        for (const e of group) {
+            const bg = STATUS_COLOR[e.status] || STATUS_COLOR['Interested'];
+            const fg = textColorForBg(bg);
+            const titleHtml = e.url
+                ? `<a href="${e.url}" style="color:#1155cc;text-decoration:none">${e.title || '(no title)'}</a>`
+                : (e.title || '(no title)');
+            bodyRows.push(`<tr>
+                ${td(e.status || '—', `background:${bg};color:${fg};font-weight:600;white-space:nowrap`)}
+                ${td(e.start  || '—', 'white-space:nowrap')}
+                ${td(e.end    || '—', 'white-space:nowrap')}
+                ${td(titleHtml)}
+                ${td(e.venue  || '—')}
+                ${td(e.type   || '—', 'color:#888;font-size:11px')}
+            </tr>`);
+        }
+    }
+
+    const html = `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px">
+        <thead>${headerRow}</thead>
+        <tbody>${bodyRows.join('')}</tbody>
+    </table>`;
+
+    const tsv = [
+        ['Date', 'Start', 'End', 'Title', 'URL', 'Venue', 'Type', 'Status'].join('\t'),
+        ...entries.map(e => [
+            e.date || '', e.start || '', e.end || '',
+            e.title || '', e.url || '', e.venue || '',
+            e.type || '', e.status || '',
+        ].join('\t')),
+    ].join('\n');
+
+    try {
+        await navigator.clipboard.write([new ClipboardItem({
+            'text/html':  new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([tsv],  { type: 'text/plain' }),
+        })]);
+        btn.textContent = `✓ ${entries.length}`;
+    } catch {
+        btn.textContent = '✗';
+    }
+    setTimeout(() => { btn.textContent = '📋'; }, 2500);
 }
 
 function markConflictsWithBooked() {
