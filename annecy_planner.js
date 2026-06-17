@@ -29,27 +29,19 @@
 //   status: string  — one of STATUSES
 // }
 
-const STATUSES = [
-    'Interested',
-    'Will attend without booking',
-    "Can't attend due to conflict",
-    'Hope to attend different showtime',
-    'Want to Book',
-    'Backup Book',
-    'Booked',
-    'Evening Freebie',
+const STATUS_ENTRIES = [
+    ['Interested',                        '#9b59b6'],
+    ['Will attend without booking',       '#3f44d0'],
+    ["Can't attend due to conflict",      '#555'   ],
+    ['Hope to attend different showtime', '#856448'],
+    ['Want to Book',                      '#fff70b'],
+    ['Backup Book',                       '#b98737'],
+    ['Booked',                            '#2ecc71'],
+    ['Evening Freebie',                   '#4c7912'],
 ];
 
-const STATUS_COLOR = {
-    'Interested':                        '#9b59b6',
-    'Will attend without booking':       '#3f44d0',
-    "Can't attend due to conflict":      '#555',
-    'Hope to attend different showtime': '#856448',
-    'Want to Book':                      '#fff70b',
-    'Backup Book':                       '#b98737',
-    'Booked':                            '#2ecc71',
-    'Evening Freebie':                   '#4c7912',
-};
+const STATUSES     = STATUS_ENTRIES.map(([s]) => s);
+const STATUS_COLOR = Object.fromEntries(STATUS_ENTRIES);
 
 // ---------------------------------------------------------------------------
 // STORAGE
@@ -248,7 +240,7 @@ GM_addStyle(`
     position: fixed;
     top: 60px;
     right: 12px;
-    width: 320px;
+    width: 380px;
     max-height: calc(100vh - 80px);
     display: flex;
     flex-direction: column;
@@ -280,11 +272,13 @@ GM_addStyle(`
 }
 #annecy-planner-toggle,
 #annecy-planner-import,
-#annecy-planner-search-toggle {
+#annecy-planner-search-toggle,
+#annecy-planner-timeline,
+#annecy-planner-export {
     background: none;
     border: none;
     color: #fff;
-    font-size: 12px;
+    font-size: 16px;
     cursor: pointer;
     line-height: 1;
     padding: 2px 4px;
@@ -457,11 +451,13 @@ GM_addStyle(`
     flex-shrink: 0;
     border-bottom: 1px solid #333;
     background: #12122a;
+    box-sizing: border-box;
 }
 #tl-labels-inner { display: flex; flex-direction: column; will-change: transform; }
 .tl-label {
     height: 34px;
     min-height: 34px;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     padding: 0 8px;
@@ -562,7 +558,7 @@ function buildPanel() {
                 <button id="annecy-planner-timeline" title="Toggle timeline">📊</button>
                 <button id="annecy-planner-search-toggle" title="Search">🔍</button>
                 <button id="annecy-planner-export" title="Copy all to clipboard (paste into Google Sheets)">📋</button>
-                <button id="annecy-planner-import" title="Import all hearted events visible on this page">⬇ Import ♥</button>
+                <button id="annecy-planner-import" title="Import all hearted events visible on this page">Import</button>
                 <button id="annecy-planner-toggle" title="Minimise">−</button>
             </div>
         </header>
@@ -616,10 +612,12 @@ function buildPanel() {
     document.getElementById('annecy-planner-toggle').addEventListener('click', () => {
         panel.style.display = 'none';
         fab.style.display = 'flex';
+        GM_setValue('annecy_minimised', '1');
     });
     fab.addEventListener('click', () => {
         panel.style.display = '';
         fab.style.display = 'none';
+        GM_setValue('annecy_minimised', '0');
     });
 
     makeDraggable(panel, document.getElementById('annecy-planner-header'));
@@ -672,7 +670,6 @@ function buildTimeline() {
     tl.style.display = 'none';
     tl.innerHTML = `
         <header id="annecy-tl-header">
-            📊 Timeline
             <div id="tl-day-nav">
                 <button class="tl-btn" id="tl-prev">◀</button>
                 <span id="tl-day-label">—</span>
@@ -830,6 +827,14 @@ function renderTimeline(autoFit = false) {
     const startHour = Math.ceil(minMin / 60);
     const endHour = Math.floor(maxMin / 60);
 
+    // Measure label column width from actual text
+    const _ctx = (renderTimeline._canvas ??= document.createElement('canvas')).getContext('2d');
+    _ctx.font = '11px system-ui, sans-serif';
+    const labelColW = venues.length
+        ? Math.max(80, ...venues.map(v => Math.ceil(_ctx.measureText(v).width) + 16))
+        : 120;
+    document.getElementById('tl-labels-col').style.width = labelColW + 'px';
+
     // Labels column
     labelsInner.innerHTML = venues.map(v =>
         `<div class="tl-label" title="${escHtml(v)}">${escHtml(v)}</div>`
@@ -870,7 +875,7 @@ function renderTimeline(autoFit = false) {
 
     if (autoFit && venues.length > 0) {
         const headerH = document.getElementById('annecy-tl-header')?.offsetHeight ?? 44;
-        const targetW = 120 + totalW + 18;
+        const targetW = labelColW + totalW + 18;
         const targetH = headerH + 28 + venues.length * 34 + 18;
         tl.style.width  = Math.min(targetW, window.innerWidth  - 24) + 'px';
         tl.style.height = Math.min(targetH, window.innerHeight - 24) + 'px';
@@ -1142,7 +1147,7 @@ function importFavourites() {
     if (booked)     parts.push(`${booked} marked Booked`);
     if (conflicted) parts.push(`${conflicted} marked conflict`);
     btn.textContent = parts.length ? `✓ ${parts.join(', ')}` : '✓ Nothing new';
-    setTimeout(() => { btn.textContent = '⬇ Import ♥'; }, 2500);
+    setTimeout(() => { btn.textContent = 'Import'; }, 2500);
 }
 
 function syncAcrossTabs() {
@@ -1242,6 +1247,16 @@ function syncAcrossTabs() {
             }
         } catch {}
     });
+
+    GM_addValueChangeListener('annecy_minimised', (_name, _old, newVal, remote) => {
+        if (!remote) return;
+        const panel = document.getElementById('annecy-planner');
+        const fab   = document.getElementById('annecy-planner-fab');
+        if (!panel || !fab) return;
+        const minimised = newVal === '1';
+        panel.style.display = minimised ? 'none' : '';
+        fab.style.display   = minimised ? 'flex'  : 'none';
+    });
 }
 
 function syncOnHeartClick() {
@@ -1305,8 +1320,13 @@ function injectMdCopyButton() {
 // ---------------------------------------------------------------------------
 
 function init() {
-    buildPanel();
+    const panel = buildPanel();
     buildTimeline();
+
+    if (GM_getValue('annecy_minimised', '0') === '1') {
+        panel.style.display = 'none';
+        document.getElementById('annecy-planner-fab').style.display = 'flex';
+    }
 
     const savedSearch = GM_getValue('annecy_search', '');
     const savedSearchVisible = GM_getValue('annecy_search_visible', '0');
