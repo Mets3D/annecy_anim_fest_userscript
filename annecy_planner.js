@@ -546,6 +546,62 @@ GM_addStyle(`
     vertical-align: middle;
 }
 #annecy-md-btn:hover { background: #3a3a6a; }
+#tl-popup {
+    position: fixed;
+    z-index: 100000;
+    background: #1a1a2e;
+    border: 1px solid #555;
+    border-radius: 6px;
+    padding: 10px 12px;
+    min-width: 220px;
+    max-width: 300px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: #e0e0e0;
+    display: none;
+}
+#tl-popup .tl-popup-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#tl-popup .tl-popup-meta {
+    font-size: 11px;
+    color: #aaa;
+    margin-bottom: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#tl-popup .tl-popup-actions { display: flex; flex-direction: column; gap: 6px; }
+#tl-popup-open {
+    display: block;
+    text-align: center;
+    background: #2a2a4a;
+    border: 1px solid #555;
+    color: #ddd;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: none;
+}
+#tl-popup-open:hover { background: #3a3a6a; color: #fff; }
+#tl-popup-status {
+    width: 100%;
+    background: #0d0d1a;
+    border: 1px solid #555;
+    color: #ddd;
+    border-radius: 4px;
+    padding: 3px 5px;
+    font-size: 11px;
+    cursor: pointer;
+    box-sizing: border-box;
+}
 `);
 
 function buildPanel() {
@@ -708,6 +764,7 @@ function buildTimeline() {
     document.getElementById('tl-close').addEventListener('click', () => {
         tl.style.display = 'none';
         saveTlVisible(false);
+        document.getElementById('tl-popup').style.display = 'none';
     });
 
     // Ctrl+wheel to zoom
@@ -744,6 +801,61 @@ function buildTimeline() {
         panning = false;
         tlRight.classList.remove('tl-panning');
     });
+
+    // Event popup
+    const popup = document.createElement('div');
+    popup.id = 'tl-popup';
+    popup.innerHTML = `
+        <div class="tl-popup-title"></div>
+        <div class="tl-popup-meta"></div>
+        <div class="tl-popup-actions">
+            <a id="tl-popup-open" target="_blank">Open event page ↗</a>
+            <select id="tl-popup-status"></select>
+        </div>
+    `;
+    document.body.appendChild(popup);
+    popup.addEventListener('click', e => e.stopPropagation());
+
+    document.getElementById('tl-popup-open').addEventListener('click', () => {
+        popup.style.display = 'none';
+    });
+
+    tlRight.addEventListener('click', e => {
+        const evEl = e.target.closest('.tl-event');
+        if (!evEl) { popup.style.display = 'none'; return; }
+        e.stopPropagation();
+
+        const entry = plan[evEl.dataset.id];
+        if (!entry) return;
+
+        popup.querySelector('.tl-popup-title').textContent = entry.title || '(no title)';
+        popup.querySelector('.tl-popup-meta').textContent =
+            [entry.start && entry.end ? `${entry.start}–${entry.end}` : null, entry.venue || null]
+                .filter(Boolean).join(' · ');
+
+        const openLink = document.getElementById('tl-popup-open');
+        openLink.href = entry.url || '#';
+
+        const statusSel = document.getElementById('tl-popup-status');
+        statusSel.innerHTML = statusOptions(entry.status);
+        const initBg = STATUS_COLOR[entry.status] || STATUS_COLOR['Interested'];
+        statusSel.style.background = initBg;
+        statusSel.style.color = textColorForBg(initBg);
+        statusSel.onchange = () => {
+            const bg = STATUS_COLOR[statusSel.value] || STATUS_COLOR['Interested'];
+            statusSel.style.background = bg;
+            statusSel.style.color = textColorForBg(bg);
+            setPlanEntry(entry.id, { status: statusSel.value });
+            popup.style.display = 'none';
+        };
+
+        const pw = 240;
+        popup.style.left = Math.min(e.clientX + 8, window.innerWidth  - pw - 8) + 'px';
+        popup.style.top  = Math.min(e.clientY + 8, window.innerHeight - 130)    + 'px';
+        popup.style.display = 'block';
+    });
+
+    document.addEventListener('click', () => { popup.style.display = 'none'; });
 
     const savedTlPos = JSON.parse(GM_getValue('annecy_tl_position', 'null'));
     if (savedTlPos) {
@@ -861,11 +973,11 @@ function renderTimeline(autoFit = false) {
             const left  = Math.round((s - minMin) / 60 * pxPerHour);
             const width = Math.max(4, Math.round((en - s) / 60 * pxPerHour));
             const color = STATUS_COLOR[e.status] || STATUS_COLOR['Interested'];
-            html += `<a class="tl-event" href="${escHtml(e.url)}" target="_blank"
+            html += `<div class="tl-event" data-id="${escHtml(e.id)}"
                 style="left:${left}px;width:${width}px;background:${color}"
                 title="${escHtml(e.title)} · ${escHtml(e.start)}–${escHtml(e.end)} · ${escHtml(e.status)}">
                 <span class="tl-event-label">${escHtml(e.title)}</span>
-            </a>`;
+            </div>`;
         }
         html += '</div>';
         return html;
@@ -916,9 +1028,7 @@ function renderPanel() {
         <div class="ap-day-entries" ${collapsed ? 'style="display:none"' : ''}>`;
         for (const e of group) {
             const color = STATUS_COLOR[e.status] || STATUS_COLOR['Interested'];
-            const options = STATUSES.map(s =>
-                `<option value="${escHtml(s)}" ${e.status === s ? 'selected' : ''}>${escHtml(s)}</option>`
-            ).join('');
+            const selFg = textColorForBg(color);
             html += `
                 <div class="ap-entry" data-id="${escHtml(e.id)}" style="border-left-color:${color}">
                     <div class="ap-title">${e.url ? `<a href="${escHtml(e.url)}" target="_blank">${escHtml(e.title || '(no title)')}</a>` : escHtml(e.title || '(no title)')}</div>
@@ -927,7 +1037,7 @@ function renderPanel() {
                         ${e.venue ? ' · ' + escHtml(e.venue) : ''}
                     </div>
                     <div class="ap-actions">
-                        <select class="ap-status" data-action="set-status">${options}</select>
+                        <select class="ap-status" data-action="set-status" style="background:${color};color:${selFg}">${statusOptions(e.status)}</select>
                         <button class="ap-btn danger" data-action="remove">✕</button>
                     </div>
                 </div>`;
@@ -956,6 +1066,9 @@ function renderPanel() {
     body.querySelectorAll('select[data-action="set-status"]').forEach(sel => {
         sel.addEventListener('change', () => {
             const id = sel.closest('[data-id]').dataset.id;
+            const bg = STATUS_COLOR[sel.value] || STATUS_COLOR['Interested'];
+            sel.style.background = bg;
+            sel.style.color = textColorForBg(bg);
             setPlanEntry(id, { status: sel.value });
         });
     });
@@ -972,6 +1085,13 @@ function renderPanel() {
 
 function escHtml(str) {
     return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function statusOptions(selected) {
+    return STATUS_ENTRIES.map(([s, bg]) => {
+        const fg = textColorForBg(bg);
+        return `<option value="${escHtml(s)}" ${selected === s ? 'selected' : ''} style="background:${bg};color:${fg}">${escHtml(s)}</option>`;
+    }).join('');
 }
 
 // ---------------------------------------------------------------------------
