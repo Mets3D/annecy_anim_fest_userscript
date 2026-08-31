@@ -33,15 +33,52 @@ const STATUS_ENTRIES = [
     ['Interested',                        '#9b59b6'],
     ['Will attend without booking',       '#3f44d0'],
     ["Can't attend due to conflict",      '#555'   ],
-    ['Hope to attend different showtime', '#856448'],
-    ['Want to Book',                      '#fff70b'],
-    ['Backup Book',                       '#b98737'],
-    ['Booked',                            '#2ecc71'],
-    ['Evening Freebie',                   '#4c7912'],
+    ['Hope to attend different showtime', '#8a3a5c'],
+    ['Want to Book',                      '#8a7500'],
+    ['Backup Book',                       '#a1541c'],
+    ['Booked',                            '#1e8449'],
+    ['Evening Freebie',                   '#1f6e7a'],
 ];
 
 const STATUSES     = STATUS_ENTRIES.map(([s]) => s);
 const STATUS_COLOR = Object.fromEntries(STATUS_ENTRIES);
+const UI = {
+    bg:            '#1a1a2e', // panel / timeline / popup background
+    bgRaised:      '#16213e', // entry card background
+    bgSunken:      '#0d0d1a', // input / select background
+    bgButton:      '#2a2a4a', // button background, and some subtle borders/dividers
+    bgButtonHover: '#3a3a6a', // button hover background
+    bgGridHeader:  '#12122a', // timeline corner/axis row background
+    bgFlashStart:  '#1a4a2e', // 'just added' flash animation start color
+
+    border:      '#555', // input / button / popup border
+    borderSoft:  '#444', // outer panel/timeline border, export table dividers
+    borderFaint: '#333', // timeline grid dividers
+    gridline:    '#252545', // timeline hour gridlines
+
+    text:         '#e0e0e0', // primary text
+    textDim:      '#ddd',    // button/input text
+    textMuted:    '#aaa',    // secondary/meta text
+    textFaint:    '#666',    // empty-state / axis label text
+    textFainter:  '#bbb',    // timeline venue label text
+    textOnAccent: '#fff',    // text/icons on the accent-colored bar and buttons
+
+    accent: '#3b4398', // header bar, danger button, focus ring, FAB
+
+    hoverWash:   'rgba(255,255,255,0.4)',
+    shadow:      'rgba(0,0,0,0.5)',
+    shadowSoft:  'rgba(0,0,0,0.4)',
+    shadowPopup: 'rgba(0,0,0,0.6)',
+
+    // Only used in the Google-Sheets clipboard export, which is static
+    // markup pasted outside the browser, so it can't reference these
+    // via CSS variables - this object is the shared source of truth instead.
+    exportDateBg:   '#2d1b4e',
+    exportBorder:   '#ccc',
+    exportLinkBlue: '#1155cc',
+    exportTypeText: '#888',
+};
+
 
 // ---------------------------------------------------------------------------
 // STORAGE
@@ -92,6 +129,11 @@ function saveTlVisible(visible) {
     GM_setValue('annecy_tl_visible', visible ? '1' : '0');
 }
 
+function saveScroll(top) {
+    panelScrollTop = top;
+    GM_setValue('annecy_scroll', String(top));
+}
+
 function saveSearch(query) {
     GM_setValue('annecy_search', query);
 }
@@ -99,6 +141,10 @@ function saveSearch(query) {
 // Returns plan keyed by screening id
 let plan = loadPlan();
 const pendingNew = new Set();
+
+// Kept in sync (locally and cross-tab) so renderPanel() can restore it
+// after every rebuild - body.innerHTML resets scrollTop to 0 otherwise.
+let panelScrollTop = parseInt(GM_getValue('annecy_scroll', '0'), 10) || 0;
 
 function setPlanEntry(id, props) {
     if (!plan[id]) pendingNew.add(id);
@@ -236,6 +282,14 @@ function findConflicts(entries) {
 // ---------------------------------------------------------------------------
 
 GM_addStyle(`
+.annecy-window {
+    transition: transform 0.22s ease-out, opacity 0.16s ease;
+}
+.annecy-window.annecy-hidden {
+    opacity: 0;
+    transform: scale(0.05);
+    pointer-events: none;
+}
 #annecy-planner {
     position: fixed;
     top: 60px;
@@ -244,14 +298,15 @@ GM_addStyle(`
     max-height: calc(100vh - 80px);
     display: flex;
     flex-direction: column;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    border: 1px solid #444;
+    background: ${UI.bg};
+    color: ${UI.text};
+    border: 1px solid ${UI.borderSoft};
     border-radius: 8px;
     font-family: system-ui, sans-serif;
     font-size: 13px;
     z-index: 99999;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 24px ${UI.shadow};
+    box-sizing: border-box;
     resize: both;
     overflow: hidden;
     min-width: 220px;
@@ -262,7 +317,7 @@ GM_addStyle(`
     align-items: center;
     justify-content: space-between;
     padding: 10px 14px;
-    background: #e63946;
+    background: ${UI.accent};
     border-radius: 8px 8px 0 0;
     font-weight: 700;
     font-size: 14px;
@@ -270,39 +325,35 @@ GM_addStyle(`
     cursor: move;
     user-select: none;
 }
-#annecy-planner-toggle,
 #annecy-planner-import,
-#annecy-planner-search-toggle,
-#annecy-planner-timeline,
 #annecy-planner-export {
     background: none;
     border: none;
-    color: #fff;
+    color: ${UI.textOnAccent};
     font-size: 16px;
     cursor: pointer;
     line-height: 1;
     padding: 2px 4px;
     border-radius: 3px;
 }
-#annecy-planner-toggle { font-size: 18px; }
-#annecy-planner-import:hover { background: rgba(255,255,255,0.15); }
+#annecy-planner-import:hover,
+#annecy-planner-export:hover { background: ${UI.hoverWash}; }
 #annecy-planner-filters {
     padding: 8px 14px;
-    border-bottom: 1px solid #2a2a4a;
-    display: none;
+    border-bottom: 1px solid ${UI.bgButton};
 }
 #annecy-filter-search {
     width: 100%;
     box-sizing: border-box;
-    background: #0d0d1a;
-    border: 1px solid #555;
+    background: ${UI.bgSunken};
+    border: 1px solid ${UI.border};
     border-radius: 4px;
-    color: #ddd;
+    color: ${UI.textDim};
     padding: 5px 8px;
     font-size: 12px;
     outline: none;
 }
-#annecy-filter-search:focus { border-color: #e63946; }
+#annecy-filter-search:focus { border-color: ${UI.accent}; }
 #annecy-planner-body {
     padding: 12px 14px;
     overflow-y: auto;
@@ -313,7 +364,7 @@ GM_addStyle(`
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #aaa;
+    color: ${UI.textMuted};
     margin: 12px 0 6px;
     cursor: pointer;
     display: flex;
@@ -321,63 +372,69 @@ GM_addStyle(`
     gap: 5px;
     user-select: none;
 }
-#annecy-planner .ap-section-title:hover { color: #ddd; }
+#annecy-planner .ap-section-title:hover { color: ${UI.textDim}; }
 #annecy-planner .ap-chevron { font-style: normal; flex-shrink: 0; }
 @keyframes ap-flash-in {
-    from { background-color: #1a4a2e; }
-    to   { background-color: #16213e; }
+    from { background-color: ${UI.bgFlashStart}; }
+    to   { background-color: ${UI.bgRaised}; }
 }
 #annecy-planner .ap-entry {
-    background: #16213e;
+    background: ${UI.bgRaised};
     border-radius: 5px;
     padding: 7px 10px;
     margin-bottom: 6px;
-    border-left: 3px solid #e63946;
+    border-left: 3px solid ${UI.accent};
 }
 #annecy-planner .ap-entry.ap-new { animation: ap-flash-in 1.2s ease-out forwards; }
 #annecy-planner .ap-entry .ap-title  { font-weight: 600; margin-bottom: 3px; }
 #annecy-planner .ap-entry .ap-title a { color: inherit; text-decoration: none; }
 #annecy-planner .ap-entry .ap-title a:hover { text-decoration: underline; }
-#annecy-planner .ap-entry .ap-meta   { font-size: 11px; color: #aaa; margin-bottom: 5px; }
+#annecy-planner .ap-entry .ap-meta   { font-size: 11px; color: ${UI.textMuted}; margin-bottom: 5px; }
 #annecy-planner .ap-actions  { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
 #annecy-planner .ap-status {
     flex: 1;
-    background: #0d0d1a;
-    border: 1px solid #555;
-    color: #ddd;
+    background: ${UI.bgSunken};
+    border: 1px solid ${UI.border};
+    color: ${UI.textDim};
     border-radius: 4px;
     padding: 3px 5px;
     font-size: 11px;
     cursor: pointer;
 }
 #annecy-planner .ap-btn {
-    background: #2a2a4a;
-    border: 1px solid #555;
-    color: #ddd;
+    background: ${UI.bgButton};
+    border: 1px solid ${UI.border};
+    color: ${UI.textDim};
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 11px;
     cursor: pointer;
 }
-#annecy-planner .ap-btn:hover { background: #3a3a6a; }
-#annecy-planner .ap-btn.danger { border-color: #e63946; color: #e63946; }
-#annecy-planner .ap-empty { color: #666; font-style: italic; text-align: center; padding: 16px 0; }
-#annecy-planner-fab {
+#annecy-planner .ap-btn:hover { background: ${UI.bgButtonHover}; }
+#annecy-planner .ap-btn.danger { border-color: ${UI.accent}; color: ${UI.accent}; }
+#annecy-planner .ap-empty { color: ${UI.textFaint}; font-style: italic; text-align: center; padding: 16px 0; }
+.annecy-fab {
     position: fixed;
     bottom: 24px;
-    right: 24px;
     width: 48px;
     height: 48px;
-    background: #e63946;
-    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: ${UI.bgButton};
+    color: ${UI.textOnAccent};
     border: none;
     border-radius: 50%;
     font-size: 22px;
     cursor: pointer;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    box-shadow: 0 2px 12px ${UI.shadowSoft};
     z-index: 99999;
-    display: none;
 }
+.annecy-fab:hover { background: ${UI.bgButtonHover}; }
+.annecy-fab.annecy-fab-active { background: ${UI.accent}; }
+.annecy-fab.annecy-fab-active:hover { filter: brightness(1.15); }
+#annecy-planner-fab   { right: 24px; }
+#annecy-timeline-fab  { right: 84px; }
 #annecy-timeline {
     position: fixed;
     top: 60px;
@@ -386,14 +443,15 @@ GM_addStyle(`
     max-height: calc(100vh - 70px);
     display: flex;
     flex-direction: column;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    border: 1px solid #444;
+    background: ${UI.bg};
+    color: ${UI.text};
+    border: 1px solid ${UI.borderSoft};
     border-radius: 8px;
     font-family: system-ui, sans-serif;
     font-size: 13px;
     z-index: 99998;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 24px ${UI.shadow};
+    box-sizing: border-box;
     resize: both;
     overflow: hidden;
     min-width: 300px;
@@ -404,7 +462,7 @@ GM_addStyle(`
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    background: #e63946;
+    background: ${UI.accent};
     border-radius: 8px 8px 0 0;
     font-weight: 700;
     font-size: 14px;
@@ -421,17 +479,17 @@ GM_addStyle(`
     justify-content: flex-start;
 }
 #tl-day-label { min-width: 180px; text-align: center; font-size: 12px; font-weight: 400; }
-.tl-btn {
+.annecy-icon-btn {
     background: none;
     border: none;
-    color: #fff;
+    color: ${UI.textOnAccent};
     cursor: pointer;
     padding: 2px 6px;
     border-radius: 3px;
     font-size: 13px;
     line-height: 1;
 }
-.tl-btn:hover { background: rgba(255,255,255,0.15); }
+.annecy-icon-btn:hover { background: ${UI.hoverWash}; }
 #annecy-tl-body {
     display: flex;
     flex: 1;
@@ -443,14 +501,14 @@ GM_addStyle(`
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #333;
+    border-right: 1px solid ${UI.borderFaint};
     overflow: hidden;
 }
 .tl-corner {
     height: 28px;
     flex-shrink: 0;
-    border-bottom: 1px solid #333;
-    background: #12122a;
+    border-bottom: 1px solid ${UI.borderFaint};
+    background: ${UI.bgGridHeader};
     box-sizing: border-box;
 }
 #tl-labels-inner { display: flex; flex-direction: column; will-change: transform; }
@@ -462,8 +520,8 @@ GM_addStyle(`
     align-items: center;
     padding: 0 8px;
     font-size: 11px;
-    color: #bbb;
-    border-bottom: 1px solid #2a2a4a;
+    color: ${UI.textFainter};
+    border-bottom: 1px solid ${UI.bgButton};
     white-space: nowrap;
     overflow: hidden;
 }
@@ -481,15 +539,15 @@ GM_addStyle(`
     top: 0;
     z-index: 1;
     flex-shrink: 0;
-    border-bottom: 1px solid #333;
-    background: #12122a;
+    border-bottom: 1px solid ${UI.borderFaint};
+    background: ${UI.bgGridHeader};
     box-sizing: border-box;
 }
 .tl-hour-mark {
     position: absolute;
     top: 6px;
     font-size: 10px;
-    color: #666;
+    color: ${UI.textFaint};
     transform: translateX(-50%);
     white-space: nowrap;
     pointer-events: none;
@@ -499,14 +557,14 @@ GM_addStyle(`
     min-height: 34px;
     position: relative;
     flex-shrink: 0;
-    border-bottom: 1px solid #2a2a4a;
+    border-bottom: 1px solid ${UI.bgButton};
     box-sizing: border-box;
 }
 .tl-gridline {
     position: absolute;
     top: 0; bottom: 0;
     width: 1px;
-    background: #252545;
+    background: ${UI.gridline};
     pointer-events: none;
 }
 .tl-event {
@@ -524,7 +582,7 @@ GM_addStyle(`
 .tl-event-label {
     padding: 0 5px;
     font-size: 10px;
-    color: rgba(0,0,0,0.85);
+    color: inherit;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -533,9 +591,9 @@ GM_addStyle(`
     user-select: none;
 }
 #annecy-md-btn {
-    background: #2a2a4a;
-    border: 1px solid #666;
-    color: #ddd;
+    background: ${UI.bgButton};
+    border: 1px solid ${UI.textFaint};
+    color: ${UI.textDim};
     border-radius: 4px;
     padding: 4px 10px;
     font-size: 12px;
@@ -545,20 +603,20 @@ GM_addStyle(`
     letter-spacing: 0.05em;
     vertical-align: middle;
 }
-#annecy-md-btn:hover { background: #3a3a6a; }
+#annecy-md-btn:hover { background: ${UI.bgButtonHover}; }
 #tl-popup {
     position: fixed;
     z-index: 100000;
-    background: #1a1a2e;
-    border: 1px solid #555;
+    background: ${UI.bg};
+    border: 1px solid ${UI.border};
     border-radius: 6px;
     padding: 10px 12px;
     min-width: 220px;
     max-width: 300px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    box-shadow: 0 4px 16px ${UI.shadowPopup};
     font-family: system-ui, sans-serif;
     font-size: 12px;
-    color: #e0e0e0;
+    color: ${UI.text};
     display: none;
 }
 #tl-popup .tl-popup-title {
@@ -571,7 +629,7 @@ GM_addStyle(`
 }
 #tl-popup .tl-popup-meta {
     font-size: 11px;
-    color: #aaa;
+    color: ${UI.textMuted};
     margin-bottom: 8px;
     white-space: nowrap;
     overflow: hidden;
@@ -581,21 +639,21 @@ GM_addStyle(`
 #tl-popup-open {
     display: block;
     text-align: center;
-    background: #2a2a4a;
-    border: 1px solid #555;
-    color: #ddd;
+    background: ${UI.bgButton};
+    border: 1px solid ${UI.border};
+    color: ${UI.textDim};
     border-radius: 4px;
     padding: 5px 8px;
     font-size: 11px;
     cursor: pointer;
     text-decoration: none;
 }
-#tl-popup-open:hover { background: #3a3a6a; color: #fff; }
+#tl-popup-open:hover { background: ${UI.bgButtonHover}; color: ${UI.textOnAccent}; }
 #tl-popup-status {
     width: 100%;
-    background: #0d0d1a;
-    border: 1px solid #555;
-    color: #ddd;
+    background: ${UI.bgSunken};
+    border: 1px solid ${UI.border};
+    color: ${UI.textDim};
     border-radius: 4px;
     padding: 3px 5px;
     font-size: 11px;
@@ -604,22 +662,87 @@ GM_addStyle(`
 }
 `);
 
+// Sets a window's visibility and puts its summoning button into the
+// matching active/inactive look - the single place both of those stay
+// in sync, whether set instantly (initial page state) or animated below.
+function setWindowOpen(win, anchorBtn, open) {
+    win.classList.toggle('annecy-hidden', !open);
+    anchorBtn.classList.toggle('annecy-fab-active', open);
+}
+
+// Shows/hides a floating window with a "genie" effect anchored at the
+// button that summoned it - scales/fades toward that button's actual
+// on-screen position, rather than just its own corner, so it visually
+// comes out of / goes back into wherever that button currently sits.
+function toggleWindow(win, anchorBtn, opening) {
+    // getBoundingClientRect() reflects the current CSS transform - if we're
+    // about to open a window that's currently .annecy-hidden (scaled down
+    // to 5%), measuring it now would give us that shrunk box instead of the
+    // natural one it's opening to. Briefly drop the hidden state (with
+    // transitions off, so nothing flashes) to measure the real box, then
+    // restore it before actually animating via setWindowOpen below.
+    if (opening) {
+        win.style.transition = 'none';
+        win.classList.remove('annecy-hidden');
+    }
+
+    const ar = anchorBtn.getBoundingClientRect();
+    const wr = win.getBoundingClientRect();
+    if (wr.width && wr.height) {
+        const originX = ((ar.left + ar.width / 2) - wr.left) / wr.width * 100;
+        const originY = ((ar.top + ar.height / 2) - wr.top) / wr.height * 100;
+        win.style.transformOrigin = `${originX}% ${originY}%`;
+    }
+
+    if (opening) {
+        win.classList.add('annecy-hidden');
+        void win.offsetWidth; // force a reflow so the transition re-engages
+        win.style.transition = '';
+    }
+
+    setWindowOpen(win, anchorBtn, opening);
+    // A window being summoned locally should render above the other one,
+    // same as dragging/resizing it. Remote opens (synced from another tab)
+    // go through setWindowOpenInstant() instead, skipping the animation -
+    // their stacking position is synced separately via annecy_top_win.
+    if (opening) bringToFront(win);
+}
+
+// Applies open/closed state instantly, with no genie animation - used when
+// mirroring another tab's visibility change, since that transition already
+// played (or is playing) over there and shouldn't replay again here too.
+function setWindowOpenInstant(win, anchorBtn, open) {
+    win.style.transition = 'none';
+    setWindowOpen(win, anchorBtn, open);
+    void win.offsetWidth; // force a reflow so the transition re-engages next time
+    win.style.transition = '';
+}
+
+function createFab(id, emoji, title) {
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.className = 'annecy-fab';
+    btn.textContent = emoji;
+    btn.title = title;
+    document.body.appendChild(btn);
+    return btn;
+}
+
 function buildPanel() {
     const panel = document.createElement('div');
     panel.id = 'annecy-planner';
+    panel.className = 'annecy-window';
     panel.innerHTML = `
         <header id="annecy-planner-header">
-            🎬 Annecy Planner
+            Annecy Planner
             <div style="display:flex;gap:6px;align-items:center;">
-                <button id="annecy-planner-timeline" title="Toggle timeline">📊</button>
-                <button id="annecy-planner-search-toggle" title="Search">🔍</button>
-                <button id="annecy-planner-export" title="Copy all to clipboard (paste into Google Sheets)">📋</button>
+                <button id="annecy-planner-export" title="Copy all data to clipboard (can be pasted into Google Sheets)">📋</button>
                 <button id="annecy-planner-import" title="Import all hearted events visible on this page">Import</button>
-                <button id="annecy-planner-toggle" title="Minimise">−</button>
+                <button id="annecy-planner-toggle" class="annecy-icon-btn">✕</button>
             </div>
         </header>
         <div id="annecy-planner-filters">
-            <input id="annecy-filter-search" type="text" placeholder="Search title, venue, type…" />
+            <input id="annecy-filter-search" type="text" placeholder="🔎 Search title, venue, type…" />
         </div>
         <div id="annecy-planner-body">
             <div class="ap-section-title">Loading…</div>
@@ -634,56 +757,79 @@ function buildPanel() {
         panel.style.right = 'auto';
     }
 
-    // FAB to reopen when minimised
-    const fab = document.createElement('button');
-    fab.id = 'annecy-planner-fab';
-    fab.textContent = '📅';
-    fab.title = 'Open Annecy Planner';
-    document.body.appendChild(fab);
+    // Permanent corner button to toggle the panel minimised/open, and one
+    // next to it for the timeline - same element shape, same styling.
+    const fab = createFab('annecy-planner-fab', '📅', 'Toggle Annecy Planner');
+    fab.classList.add('annecy-fab-active'); // panel starts open
+    fab.addEventListener('click', toggleMinimised);
 
-    document.getElementById('annecy-planner-import').addEventListener('click', importFavourites);
-    document.getElementById('annecy-planner-export').addEventListener('click', exportToClipboard);
-    document.getElementById('annecy-planner-timeline').addEventListener('click', () => {
+    const timelineFab = createFab('annecy-timeline-fab', '📊', 'Toggle timeline');
+    timelineFab.addEventListener('click', () => {
         const tl = document.getElementById('annecy-timeline');
-        const opening = tl.style.display === 'none';
-        tl.style.display = opening ? '' : 'none';
+        const opening = tl.classList.contains('annecy-hidden');
+        toggleWindow(tl, timelineFab, opening);
         saveTlVisible(opening);
         if (opening) renderTimeline(true);
     });
 
-    const filterBar = document.getElementById('annecy-planner-filters');
+    document.getElementById('annecy-planner-import').addEventListener('click', importFavourites);
+    document.getElementById('annecy-planner-export').addEventListener('click', exportToClipboard);
+
     const searchInput = document.getElementById('annecy-filter-search');
-    document.getElementById('annecy-planner-search-toggle').addEventListener('click', () => {
-        const open = filterBar.style.display !== 'block';
-        filterBar.style.display = open ? 'block' : 'none';
-        GM_setValue('annecy_search_visible', open ? '1' : '0');
-        if (open) searchInput.focus();
-        applyFilter();
-    });
     searchInput.addEventListener('input', () => {
         saveSearch(searchInput.value);
         applyFilter();
     });
 
-    document.getElementById('annecy-planner-toggle').addEventListener('click', () => {
-        panel.style.display = 'none';
-        fab.style.display = 'flex';
-        GM_setValue('annecy_minimised', '1');
-    });
-    fab.addEventListener('click', () => {
-        panel.style.display = '';
-        fab.style.display = 'none';
-        GM_setValue('annecy_minimised', '0');
+    const body = document.getElementById('annecy-planner-body');
+    let scrollTimer = null;
+    body.addEventListener('scroll', () => {
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(() => {
+            if (body.scrollTop !== panelScrollTop) {
+                saveScroll(body.scrollTop);
+            }
+        }, 300);
     });
 
+    document.getElementById('annecy-planner-toggle').addEventListener('click', toggleMinimised);
+
+    function toggleMinimised() {
+        const opening = panel.classList.contains('annecy-hidden');
+        toggleWindow(panel, fab, opening);
+        GM_setValue('annecy_minimised', opening ? '0' : '1');
+    }
+
+    makeResizable(panel, 'annecy_size');
     makeDraggable(panel, document.getElementById('annecy-planner-header'));
     return panel;
 }
+
+// Both floating windows share a stacking context; whichever one the user
+// last dragged, resized, or opened should render on top of the other -
+// and that ordering is synced across tabs via annecy_top_win below. topZ
+// only ever increases, so each local bring-to-front is guaranteed higher
+// than whatever came before (including the windows' CSS base z-indexes).
+let topZ = 99999;
+function bringToFrontLocal(win) {
+    win.style.zIndex = String(++topZ);
+}
+function bringToFront(win) {
+    bringToFrontLocal(win);
+    GM_setValue('annecy_top_win', win.id);
+}
+
+// Resizes applied by applyRemoteSize() (i.e. synced from another tab)
+// shouldn't count as "the user resized this window" for bringToFront
+// purposes - this tracks which elements' next ResizeObserver firing
+// should be treated as such a sync rather than a real interaction.
+const pendingRemoteResize = new WeakSet();
 
 function makeDraggable(el, handle, onDragEnd = savePosition) {
     let ox = 0, oy = 0;
     handle.addEventListener('mousedown', e => {
         e.preventDefault();
+        bringToFront(el);
         ox = e.clientX - el.getBoundingClientRect().left;
         oy = e.clientY - el.getBoundingClientRect().top;
         const onMove = e => {
@@ -699,6 +845,47 @@ function makeDraggable(el, handle, onDragEnd = savePosition) {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
     });
+}
+
+// Restores a persisted size on load and saves it (debounced) whenever the
+// element is resized via its `resize: both` handle - the resize counterpart
+// to makeDraggable's position persistence.
+function makeResizable(el, storageKey) {
+    const saved = JSON.parse(GM_getValue(storageKey, 'null'));
+    if (saved) {
+        el.style.width  = saved.width  + 'px';
+        el.style.height = saved.height + 'px';
+    }
+
+    let resizeTimer = null;
+    // ResizeObserver fires once immediately on observe(), with no user
+    // interaction involved - skip bringToFront for that first firing too.
+    let firstObservation = true;
+    new ResizeObserver(() => {
+        if (firstObservation || pendingRemoteResize.has(el)) {
+            firstObservation = false;
+            pendingRemoteResize.delete(el);
+        } else {
+            bringToFront(el);
+        }
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            GM_setValue(storageKey, JSON.stringify({ width: el.offsetWidth, height: el.offsetHeight }));
+        }, 300);
+    }).observe(el);
+}
+
+// Applies a size received from another tab, but only if it actually
+// differs from the current one. Both windows are box-sizing: border-box
+// now, so offsetWidth/offsetHeight and style.width/height round-trip
+// losslessly - this skip is just insurance against triggering this tab's
+// own ResizeObserver (and thus a redundant GM_setValue) for a no-op.
+function applyRemoteSize(el, size) {
+    if (!el || !size) return;
+    if (el.offsetWidth === size.width && el.offsetHeight === size.height) return;
+    pendingRemoteResize.add(el);
+    el.style.width  = size.width  + 'px';
+    el.style.height = size.height + 'px';
 }
 
 const collapsedDays = new Set(JSON.parse(GM_getValue('annecy_collapsed', '[]')));
@@ -723,16 +910,16 @@ function getTimelineDays() {
 function buildTimeline() {
     const tl = document.createElement('div');
     tl.id = 'annecy-timeline';
-    tl.style.display = 'none';
+    tl.className = 'annecy-window annecy-hidden';
     tl.innerHTML = `
         <header id="annecy-tl-header">
             <div id="tl-day-nav">
-                <button class="tl-btn" id="tl-prev">◀</button>
+                <button class="annecy-icon-btn" id="tl-prev">◀</button>
                 <span id="tl-day-label">—</span>
-                <button class="tl-btn" id="tl-next">▶</button>
+                <button class="annecy-icon-btn" id="tl-next">▶</button>
             </div>
             <div style="display:flex;gap:4px;">
-                <button class="tl-btn" id="tl-close">✕</button>
+                <button class="annecy-icon-btn" id="tl-close">✕</button>
             </div>
         </header>
         <div id="annecy-tl-body">
@@ -762,7 +949,7 @@ function buildTimeline() {
         renderTimeline(true);
     });
     document.getElementById('tl-close').addEventListener('click', () => {
-        tl.style.display = 'none';
+        toggleWindow(tl, document.getElementById('annecy-timeline-fab'), false);
         saveTlVisible(false);
         document.getElementById('tl-popup').style.display = 'none';
     });
@@ -864,24 +1051,12 @@ function buildTimeline() {
         tl.style.right = 'auto';
     }
 
-    const savedTlSize = JSON.parse(GM_getValue('annecy_tl_size', 'null'));
-    if (savedTlSize) {
-        tl.style.width  = savedTlSize.width  + 'px';
-        tl.style.height = savedTlSize.height + 'px';
-    }
+    makeResizable(tl, 'annecy_tl_size');
 
     timelineDayIndex = parseInt(GM_getValue('annecy_tl_day', '0'), 10) || 0;
 
-    let tlResizeTimer = null;
-    new ResizeObserver(() => {
-        clearTimeout(tlResizeTimer);
-        tlResizeTimer = setTimeout(() => {
-            GM_setValue('annecy_tl_size', JSON.stringify({ width: tl.offsetWidth, height: tl.offsetHeight }));
-        }, 300);
-    }).observe(tl);
-
     if (GM_getValue('annecy_tl_visible', '0') === '1') {
-        tl.style.display = '';
+        setWindowOpen(tl, document.getElementById('annecy-timeline-fab'), true);
         renderTimeline(true);
     }
 
@@ -890,7 +1065,7 @@ function buildTimeline() {
 
 function renderTimeline(autoFit = false) {
     const tl = document.getElementById('annecy-timeline');
-    if (!tl || tl.style.display === 'none') return;
+    if (!tl || tl.classList.contains('annecy-hidden')) return;
 
     const days = getTimelineDays();
     const labelsInner = document.getElementById('tl-labels-inner');
@@ -922,7 +1097,10 @@ function renderTimeline(autoFit = false) {
     }
     if (!isFinite(minMin)) { minMin = 9 * 60; maxMin = 22 * 60; }
     minMin = Math.max(0, minMin - 30);
-    maxMin = Math.min(24 * 60, maxMin + 30);
+    // No upper clamp here - an event ending after midnight (endMinutes()
+    // already added 24h to its end time) should extend the view instead
+    // of getting cut off at the day boundary.
+    maxMin = maxMin + 30;
 
     const totalMin = maxMin - minMin;
     const totalW = Math.round(totalMin / 60 * pxPerHour);
@@ -956,7 +1134,9 @@ function renderTimeline(autoFit = false) {
     let axisHtml = `<div class="tl-axis-row" style="width:${totalW}px">`;
     for (let h = startHour; h <= endHour; h++) {
         const left = Math.round((h * 60 - minMin) / 60 * pxPerHour);
-        axisHtml += `<div class="tl-hour-mark" style="left:${left}px">${String(h).padStart(2,'0')}:00</div>`;
+        // h can run past 24 once the view extends past midnight - wrap the
+        // label back to 00:00-23:00 so it still reads as a normal hour.
+        axisHtml += `<div class="tl-hour-mark" style="left:${left}px">${String(h % 24).padStart(2,'0')}:00</div>`;
     }
     axisHtml += '</div>';
 
@@ -973,8 +1153,9 @@ function renderTimeline(autoFit = false) {
             const left  = Math.round((s - minMin) / 60 * pxPerHour);
             const width = Math.max(4, Math.round((en - s) / 60 * pxPerHour));
             const color = STATUS_COLOR[e.status] || STATUS_COLOR['Interested'];
+            const fg = textColorForBg(color);
             html += `<div class="tl-event" data-id="${escHtml(e.id)}"
-                style="left:${left}px;width:${width}px;background:${color}"
+                style="left:${left}px;width:${width}px;background:${color};color:${fg}"
                 title="${escHtml(e.title)} · ${escHtml(e.start)}–${escHtml(e.end)} · ${escHtml(e.status)}">
                 <span class="tl-event-label">${escHtml(e.title)}</span>
             </div>`;
@@ -1046,6 +1227,7 @@ function renderPanel() {
     }
 
     body.innerHTML = html;
+    body.scrollTop = panelScrollTop; // innerHTML above just reset it to 0
 
     pendingNew.forEach(id => {
         body.querySelector(`[data-id="${id}"]`)?.classList.add('ap-new');
@@ -1099,9 +1281,7 @@ function statusOptions(selected) {
 // ---------------------------------------------------------------------------
 
 function applyFilter() {
-    const filterBar = document.getElementById('annecy-planner-filters');
-    const barVisible = filterBar?.style.display === 'block';
-    const q = barVisible ? (document.getElementById('annecy-filter-search')?.value || '').toLowerCase().trim() : '';
+    const q = (document.getElementById('annecy-filter-search')?.value || '').toLowerCase().trim();
     document.querySelectorAll('#annecy-planner-body .ap-entry').forEach(el => {
         const e = plan[el.dataset.id];
         const match = !q || [e?.title, e?.venue, e?.type].some(f => f?.toLowerCase().includes(q));
@@ -1165,24 +1345,24 @@ async function exportToClipboard() {
     for (const e of entries) (byDate[e.date || 'Unknown'] ??= []).push(e);
 
     const td = (content, style = '') =>
-        `<td style="padding:5px 9px;border:1px solid #ccc;vertical-align:middle;${style}">${content}</td>`;
+        `<td style="padding:5px 9px;border:1px solid ${UI.exportBorder};vertical-align:middle;${style}">${content}</td>`;
 
-    const headerRow = `<tr style="background:#1a1a2e;color:#fff;font-weight:bold">
+    const headerRow = `<tr style="background:${UI.bg};color:${UI.textOnAccent};font-weight:bold">
         ${['Status', 'Start', 'End', 'Title', 'Venue', 'Type'].map(h =>
-            `<th style="padding:6px 9px;border:1px solid #555;text-align:left;white-space:nowrap">${h}</th>`
+            `<th style="padding:6px 9px;border:1px solid ${UI.border};text-align:left;white-space:nowrap">${h}</th>`
         ).join('')}
     </tr>`;
 
     const bodyRows = [];
     for (const [date, group] of Object.entries(byDate)) {
-        bodyRows.push(`<tr style="background:#2d1b4e">
-            <td colspan="6" style="padding:4px 9px;font-weight:bold;color:#ccc;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;border:1px solid #444">${date}</td>
+        bodyRows.push(`<tr style="background:${UI.exportDateBg}">
+            <td colspan="6" style="padding:4px 9px;font-weight:bold;color:${UI.exportBorder};font-size:11px;letter-spacing:0.06em;text-transform:uppercase;border:1px solid ${UI.borderSoft}">${date}</td>
         </tr>`);
         for (const e of group) {
             const bg = STATUS_COLOR[e.status] || STATUS_COLOR['Interested'];
             const fg = textColorForBg(bg);
             const titleHtml = e.url
-                ? `<a href="${e.url}" style="color:#1155cc;text-decoration:none">${e.title || '(no title)'}</a>`
+                ? `<a href="${e.url}" style="color:${UI.exportLinkBlue};text-decoration:none">${e.title || '(no title)'}</a>`
                 : (e.title || '(no title)');
             bodyRows.push(`<tr>
                 ${td(e.status || '—', `background:${bg};color:${fg};font-weight:600;white-space:nowrap`)}
@@ -1190,7 +1370,7 @@ async function exportToClipboard() {
                 ${td(e.end    || '—', 'white-space:nowrap')}
                 ${td(titleHtml)}
                 ${td(e.venue  || '—')}
-                ${td(e.type   || '—', 'color:#888;font-size:11px')}
+                ${td(e.type   || '—', `color:${UI.exportTypeText};font-size:11px`)}
             </tr>`);
         }
     }
@@ -1303,12 +1483,6 @@ function syncAcrossTabs() {
         applyFilter();
     });
 
-    GM_addValueChangeListener('annecy_search_visible', (_name, _old, newVal, remote) => {
-        if (!remote) return;
-        document.getElementById('annecy-planner-filters').style.display = newVal === '1' ? 'block' : 'none';
-        applyFilter();
-    });
-
     GM_addValueChangeListener('annecy_position', (_name, _old, newVal, remote) => {
         if (!remote) return;
         try {
@@ -1342,9 +1516,10 @@ function syncAcrossTabs() {
     GM_addValueChangeListener('annecy_tl_visible', (_name, _old, newVal, remote) => {
         if (!remote) return;
         const tl = document.getElementById('annecy-timeline');
-        if (!tl) return;
+        const timelineFab = document.getElementById('annecy-timeline-fab');
+        if (!tl || !timelineFab) return;
         const opening = newVal === '1';
-        tl.style.display = opening ? '' : 'none';
+        setWindowOpenInstant(tl, timelineFab, opening);
         if (opening) renderTimeline();
     });
 
@@ -1354,28 +1529,38 @@ function syncAcrossTabs() {
         renderTimeline(true);
     });
 
+    GM_addValueChangeListener('annecy_scroll', (_name, _old, newVal, remote) => {
+        if (!remote) return;
+        panelScrollTop = parseInt(newVal, 10) || 0;
+        const body = document.getElementById('annecy-planner-body');
+        if (body) body.scrollTop = panelScrollTop;
+    });
+
+    GM_addValueChangeListener('annecy_size', (_name, _old, newVal, remote) => {
+        if (!remote) return;
+        try { applyRemoteSize(document.getElementById('annecy-planner'), JSON.parse(newVal)); } catch {}
+    });
+
     GM_addValueChangeListener('annecy_tl_size', (_name, _old, newVal, remote) => {
         if (!remote) return;
-        try {
-            const size = JSON.parse(newVal);
-            if (size) {
-                const tl = document.getElementById('annecy-timeline');
-                if (tl) {
-                    tl.style.width  = size.width  + 'px';
-                    tl.style.height = size.height + 'px';
-                }
-            }
-        } catch {}
+        try { applyRemoteSize(document.getElementById('annecy-timeline'), JSON.parse(newVal)); } catch {}
+    });
+
+    // Just the stacking order - open/closed state and geometry are synced
+    // by their own listeners above/below, so this only ever moves whichever
+    // window newVal names above the other one, nothing else.
+    GM_addValueChangeListener('annecy_top_win', (_name, _old, newVal, remote) => {
+        if (!remote) return;
+        const win = document.getElementById(newVal);
+        if (win) bringToFrontLocal(win);
     });
 
     GM_addValueChangeListener('annecy_minimised', (_name, _old, newVal, remote) => {
         if (!remote) return;
         const panel = document.getElementById('annecy-planner');
-        const fab   = document.getElementById('annecy-planner-fab');
+        const fab = document.getElementById('annecy-planner-fab');
         if (!panel || !fab) return;
-        const minimised = newVal === '1';
-        panel.style.display = minimised ? 'none' : '';
-        fab.style.display   = minimised ? 'flex'  : 'none';
+        setWindowOpenInstant(panel, fab, newVal !== '1');
     });
 }
 
@@ -1444,18 +1629,13 @@ function init() {
     buildTimeline();
 
     if (GM_getValue('annecy_minimised', '0') === '1') {
-        panel.style.display = 'none';
-        document.getElementById('annecy-planner-fab').style.display = 'flex';
+        setWindowOpen(panel, document.getElementById('annecy-planner-fab'), false);
     }
 
     const savedSearch = GM_getValue('annecy_search', '');
-    const savedSearchVisible = GM_getValue('annecy_search_visible', '0');
     if (savedSearch) {
         const input = document.getElementById('annecy-filter-search');
         if (input) input.value = savedSearch;
-    }
-    if (savedSearchVisible === '1') {
-        document.getElementById('annecy-planner-filters').style.display = 'block';
     }
 
     renderPanel();
