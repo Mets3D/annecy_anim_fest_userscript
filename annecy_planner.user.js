@@ -359,6 +359,10 @@ GM_addStyle(`
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+    /* Leaves the native resize grip (bottom-right corner of #annecy-planner)
+       a clear strip below the scrollbar, so grabbing it doesn't also land
+       on the scrollbar's track/down-arrow and trigger a scroll instead. */
+    margin-bottom: 16px;
 }
 #annecy-planner .ap-section-title {
     font-size: 11px;
